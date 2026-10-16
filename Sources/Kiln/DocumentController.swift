@@ -48,6 +48,9 @@ final class DocumentController: ObservableObject {
   @Published var showBrowserPrompt = false
   @Published private(set) var isFileActionBusy = false
   @Published private(set) var fileActionStatus: String?
+  @Published private(set) var isSaving = false
+  @Published private(set) var saveProblem: String?
+  @Published private(set) var recoveryURL: URL?
 
   private(set) var originalBytes = Data()
   private(set) var originalHTML = ""
@@ -70,12 +73,36 @@ final class DocumentController: ObservableObject {
   private var draftContinuation: CheckedContinuation<Bool, Never>?
   private let fileActions: any DocumentFileActions
   private var fileStatusTask: Task<Void, Never>?
+  private let recoveryStore: DocumentRecoveryStore
+  private let autosaveDelayNanoseconds: UInt64
+  private let chooseSaveDestination: (() -> URL?)?
+  private var autosaveTask: Task<Void, Never>?
+  private var saveTask: Task<Bool, Never>?
+  private var sessionID = UUID()
+  private var editRevision = 0
+  private var askedForSaveLocation = false
+  // User-authored HTML is authoritative until an actual page/CSS edit replaces it.
+  // Saving it must not parse, normalize, reload, or reset either editor's undo history.
+  private var exactHTML: String?
 
-  init(fileActions: (any DocumentFileActions)? = nil) {
+  init(
+    fileActions: (any DocumentFileActions)? = nil,
+    autosaveDelayNanoseconds: UInt64 = 1_000_000_000,
+    recoveryDirectory: URL? = nil,
+    chooseSaveDestination: (() -> URL?)? = nil
+  ) {
     self.fileActions = fileActions ?? SystemDocumentFileActions()
+    self.autosaveDelayNanoseconds = autosaveDelayNanoseconds
+    self.recoveryStore = DocumentRecoveryStore(directory: recoveryDirectory)
+    self.chooseSaveDestination = chooseSaveDestination
   }
 
-  var saveState: String { isDirty ? "Edited" : (fileURL == nil ? "Sample" : "Saved") }
+  var saveState: String {
+    if isSaving { return "Saving…" }
+    if saveProblem != nil { return "Couldn’t save" }
+    if isDirty { return fileURL == nil ? "Choose a save location" : "Waiting to save…" }
+    return fileURL == nil ? "Sample" : "Saved"
+  }
   var hasDocument: Bool { !renderedHTML.isEmpty }
   var isLoading: Bool { loadCandidate != nil }
   var hasSourceDraft: Bool { sourceVisible && sourceText != sourceBaseline }
@@ -87,6 +114,7 @@ final class DocumentController: ObservableObject {
 
   func showSource(_ language: SourceLanguage) async {
     guard hasDocument, !isLoading, !sourceIsBusy, !isFileActionBusy else { return }
+    guard !sourceVisible || sourceLanguage != language else { return }
     sourceIsBusy = true
     defer { sourceIsBusy = false }
     guard await synchronizeFromEditor(), let editor else { return }
@@ -99,7 +127,7 @@ final class DocumentController: ObservableObject {
         stylesheetID = selected?.id ?? "new"
         sourceText = selected?.css ?? ""
       } else {
-        sourceText = renderedHTML
+        sourceText = exactHTML ?? (isDirty ? renderedHTML : originalHTML)
       }
       sourceLanguage = language
       sourceBaseline = sourceText
@@ -131,9 +159,13 @@ final class DocumentController: ObservableObject {
 
   func editSource(_ text: String) {
     guard !sourceIsBusy, !isLoading, !isEditingLocked, !isFileActionBusy else { return }
+    guard text != sourceText else { return }
     sourceText = text
     sourceRevision += 1
-    isDirty = hasSourceDraft || renderedHTML != baselineSerializedHTML
+    editRevision += 1
+    if sourceLanguage == .html { exactHTML = text }
+    updateDirtyState()
+    scheduleAutosave()
     cssTask?.cancel()
     guard sourceLanguage == .css else { return }
     cssTask = Task { [weak self] in
@@ -178,9 +210,12 @@ final class DocumentController: ObservableObject {
     cssTask?.cancel()
     cssTask = nil
     guard sourceVisible, sourceLanguage == .css, hasSourceDraft, let editor else { return }
+    let session = sessionID
     let revision = sourceRevision
     let text = sourceText
     try await editor.setStylesheet(stylesheetID, css: text)
+    guard session == sessionID else { return }
+    exactHTML = nil
     if revision == sourceRevision { sourceBaseline = text }
   }
 
@@ -243,6 +278,15 @@ final class DocumentController: ObservableObject {
     }
   }
 
+  func revealRecovery() {
+    guard let recoveryURL else { return }
+    do {
+      try fileActions.revealInFinder(recoveryURL.appendingPathComponent("draft.html"))
+    } catch {
+      errorMessage = "Couldn't reveal the recovery copy: \(error.localizedDescription)"
+    }
+  }
+
   func setOnQuitApproved(_ action: @escaping () -> Void) { onQuitApproved = action }
   func setOnCloseApproved(_ action: @escaping () -> Void) { onCloseApproved = action }
 
@@ -270,7 +314,9 @@ final class DocumentController: ObservableObject {
       return
     }
     Task {
-      guard await synchronizeFromEditor() else { return }
+      cancelScheduledAutosave()
+      await finishSaving()
+      guard await synchronizeFromEditor(applyHTML: false) else { return }
       pendingURL = url
       continueAfterUnsavedChanges()
     }
@@ -283,7 +329,9 @@ final class DocumentController: ObservableObject {
   func requestClose(_ action: @escaping () -> Void) {
     onCloseApproved = action
     Task {
-      guard await synchronizeFromEditor() else { return }
+      cancelScheduledAutosave()
+      await finishSaving()
+      guard await synchronizeFromEditor(applyHTML: false) else { return }
       pendingClose = true
       continueAfterUnsavedChanges()
     }
@@ -292,7 +340,9 @@ final class DocumentController: ObservableObject {
   func requestQuit(_ action: @escaping () -> Void) {
     onQuitApproved = action
     Task {
-      guard await synchronizeFromEditor() else { return }
+      cancelScheduledAutosave()
+      await finishSaving()
+      guard await synchronizeFromEditor(applyHTML: false) else { return }
       pendingQuit = true
       continueAfterUnsavedChanges()
     }
@@ -304,6 +354,7 @@ final class DocumentController: ObservableObject {
       switch choice {
       case .cancel:
         clearPendingAction()
+        scheduleAutosave()
       case .discard:
         performPendingAction()
       case .save:
@@ -350,10 +401,18 @@ final class DocumentController: ObservableObject {
   }
 
   func editorDidChange(html: String, wordCount: Int, outline: [Heading]?) {
+    guard !isLoading else { return }
+    let changed = html != renderedHTML
+    if changed {
+      editRevision += 1
+      // HTML source locks the page; a late bridge notification cannot supersede it.
+      if !sourceVisible || sourceLanguage != .html { exactHTML = nil }
+    }
     renderedHTML = html
     self.wordCount = max(0, wordCount)
     if let outline { headings = outline }
-    isDirty = html != baselineSerializedHTML || hasSourceDraft
+    updateDirtyState()
+    if changed { scheduleAutosave() }
   }
 
   func replaceOutline(_ outline: [Heading]) { headings = outline }
@@ -380,19 +439,134 @@ final class DocumentController: ObservableObject {
 
   @discardableResult
   func save() async -> Bool {
-    guard await synchronizeFromEditor() else { return false }
-    guard let destination = fileURL else { return await saveAs() }
-    return write(to: destination, checkExternalChanges: true)
+    cancelScheduledAutosave()
+    return await persist(asCopy: false, automatic: false)
   }
 
   @discardableResult
   func saveAs() async -> Bool {
-    guard await synchronizeFromEditor() else { return false }
+    cancelScheduledAutosave()
+    return await persist(asCopy: true, automatic: false)
+  }
+
+  private func cancelScheduledAutosave() {
+    autosaveTask?.cancel()
+    autosaveTask = nil
+  }
+
+  private func scheduleAutosave() {
+    cancelScheduledAutosave()
+    guard hasDocument, isDirty || recoveryURL != nil, !showUnsavedPrompt else { return }
+    let session = sessionID
+    let delay = autosaveDelayNanoseconds
+    autosaveTask = Task { [weak self] in
+      do { try await Task.sleep(nanoseconds: delay) } catch { return }
+      guard let self, self.sessionID == session else { return }
+      self.autosaveTask = nil
+      _ = await self.persist(asCopy: false, automatic: true)
+    }
+  }
+
+  private func finishSaving() async {
+    while let task = saveTask { _ = await task.value }
+  }
+
+  private func persist(asCopy: Bool, automatic: Bool) async -> Bool {
+    let session = sessionID
+    await finishSaving()
+    guard sessionID == session, hasDocument, !isLoading, !showUnsavedPrompt else { return false }
+    if automatic && (sourceIsBusy || isFileActionBusy || showBrowserPrompt) {
+      scheduleAutosave()
+      return false
+    }
+    isSaving = true
+    let task = Task { @MainActor in
+      defer {
+        self.saveTask = nil
+        self.isSaving = false
+      }
+      return await self.saveCurrentDocument(asCopy: asCopy, automatic: automatic)
+    }
+    saveTask = task
+    return await task.value
+  }
+
+  private func saveCurrentDocument(asCopy: Bool, automatic: Bool) async -> Bool {
+    let session = sessionID
+    let reportFailure: (String) -> Void = { self.recordSaveFailure($0, automatic: automatic) }
+    guard await synchronizeFromEditor(applyHTML: false, reportFailure: reportFailure) else {
+      return false
+    }
+    guard sessionID == session, !isLoading else { return false }
+
+    // A recovery failure blocks overwriting the document. On a file conflict, subsequent
+    // edits still refresh this copy, but never retry overwriting the external version.
+    var bytes = contentsToSave
+    guard keepRecovery(bytes, automatic: automatic) else { return false }
+    if automatic && (saveProblem != nil || !isDirty) { return false }
+
+    let destination: URL
+    if let fileURL, !asCopy {
+      destination = fileURL
+    } else {
+      if automatic && askedForSaveLocation { return false }
+      askedForSaveLocation = true
+      guard let selected = selectSaveDestination() else { return false }
+      destination = selected
+      // Panels run a nested event loop: read the latest edit, not the pre-panel snapshot.
+      guard sessionID == session,
+        await synchronizeFromEditor(applyHTML: false, reportFailure: reportFailure),
+        sessionID == session, !isLoading
+      else { return false }
+      bytes = contentsToSave
+      guard keepRecovery(bytes, automatic: automatic) else { return false }
+    }
+    let sameFile = destination.resolvingSymlinksInPath() == fileURL?.resolvingSymlinksInPath()
+    guard write(bytes, to: destination, checkExternalChanges: sameFile, automatic: automatic) else {
+      return false
+    }
+    fileURL = destination
+    sourceURL = destination
+    displayName = destination.lastPathComponent
+    return true
+  }
+
+  private func keepRecovery(_ bytes: Data, automatic: Bool) -> Bool {
+    guard isDirty || recoveryURL != nil else { return true }
+    do {
+      recoveryURL = try recoveryStore.write(
+        original: originalBytes, draft: bytes, sourceURL: fileURL, sessionID: sessionID)
+      return true
+    } catch {
+      recordSaveFailure(
+        "Couldn't keep a recovery copy; your file was not overwritten: \(error.localizedDescription)",
+        automatic: automatic)
+      return false
+    }
+  }
+
+  private var contentsToSave: Data {
+    if let exactHTML { return Data(exactHTML.utf8) }
+    return renderedHTML == baselineSerializedHTML ? originalBytes : Data(renderedHTML.utf8)
+  }
+
+  private func updateDirtyState() {
+    isDirty = contentsToSave != originalBytes || (sourceLanguage == .css && hasSourceDraft)
+  }
+
+  private func recordSaveFailure(_ message: String, automatic: Bool) {
+    let alreadyPaused = saveProblem != nil
+    saveProblem = message
+    if !automatic || !alreadyPaused { errorMessage = message }
+  }
+
+  private func selectSaveDestination() -> URL? {
+    if let chooseSaveDestination { return chooseSaveDestination() }
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.html]
     panel.nameFieldStringValue = displayName == "Untitled.html" ? "Untitled.html" : displayName
-    panel.message = "Save this HTML document."
-    guard panel.runModal() == .OK, let destination = panel.url else { return false }
+    panel.message = "Choose a location. Kiln will save your changes automatically."
+    guard panel.runModal() == .OK, let destination = panel.url else { return nil }
     if sourceURL?.deletingLastPathComponent().standardizedFileURL
       != destination.deletingLastPathComponent().standardizedFileURL
     {
@@ -402,13 +576,9 @@ final class DocumentController: ObservableObject {
         "Kiln does not copy nearby images or stylesheets. Relative URLs will resolve from the new folder and may stop working. Copy those assets alongside the saved HTML."
       warning.addButton(withTitle: "Save HTML Only")
       warning.addButton(withTitle: "Cancel")
-      guard warning.runModal() == .alertFirstButtonReturn else { return false }
+      guard warning.runModal() == .alertFirstButtonReturn else { return nil }
     }
-    guard write(to: destination, checkExternalChanges: false) else { return false }
-    fileURL = destination
-    sourceURL = destination
-    displayName = destination.lastPathComponent
-    return true
+    return destination
   }
 
   func receiveDrop(_ urls: [URL]) -> Bool {
@@ -430,6 +600,7 @@ final class DocumentController: ObservableObject {
               "Kiln opens UTF-8 HTML only. This file uses a different or invalid text encoding."
           ])
       }
+      cancelScheduledAutosave()
       let request = LoadRequest(id: UUID(), url: url, bytes: bytes)
       loadCandidate = (request.id, url, bytes, html, hasSaveDestination)
       navigationFinishedID = nil
@@ -442,21 +613,17 @@ final class DocumentController: ObservableObject {
   }
 
   @discardableResult
-  private func write(to destination: URL, checkExternalChanges: Bool) -> Bool {
-    let bytes: Data
-    if !isDirty {
-      bytes = originalBytes
-    } else {
-      bytes = Data(renderedHTML.utf8)
-    }
-
+  private func write(
+    _ bytes: Data, to destination: URL, checkExternalChanges: Bool, automatic: Bool
+  ) -> Bool {
     do {
       var currentBytes: Data?
       if checkExternalChanges {
         currentBytes = try Data(contentsOf: destination)
         guard currentBytes == originalBytes else {
-          errorMessage =
-            "\(destination.lastPathComponent) changed outside Kiln. Save As to keep your edits without overwriting the newer file."
+          recordSaveFailure(
+            "\(destination.lastPathComponent) changed outside Kiln. Autosave is paused. Save As to keep your edits without overwriting the newer file.",
+            automatic: automatic)
           return false
         }
       }
@@ -464,13 +631,16 @@ final class DocumentController: ObservableObject {
         try bytes.write(to: destination, options: .atomic)
       }
       originalBytes = bytes
-      originalHTML = renderedHTML
+      originalHTML = String(decoding: bytes, as: UTF8.self)
       baselineSerializedHTML = renderedHTML
-      isDirty = hasSourceDraft
+      updateDirtyState()
+      saveProblem = nil
       errorMessage = nil
       return true
     } catch {
-      errorMessage = "Couldn't save \(destination.lastPathComponent): \(error.localizedDescription)"
+      recordSaveFailure(
+        "Couldn't save \(destination.lastPathComponent): \(error.localizedDescription)",
+        automatic: automatic)
       return false
     }
   }
@@ -492,6 +662,13 @@ final class DocumentController: ObservableObject {
 
     let isDraft = draftLoadID == candidate.requestID
     if !isDraft {
+      cancelScheduledAutosave()
+      sessionID = UUID()
+      editRevision += 1
+      askedForSaveLocation = false
+      exactHTML = nil
+      saveProblem = nil
+      recoveryURL = nil
       sourceURL = candidate.url
       fileURL = candidate.hasSaveDestination ? candidate.url : nil
       displayName = candidate.hasSaveDestination ? candidate.url.lastPathComponent : "Untitled.html"
@@ -503,13 +680,16 @@ final class DocumentController: ObservableObject {
       fileStatusTask?.cancel()
       fileActionStatus = nil
       showBrowserPrompt = false
+    } else if candidate.bytes == originalBytes {
+      // A saved, still-unapplied HTML draft now has a normalized preview baseline.
+      baselineSerializedHTML = ready.html
     }
     renderedHTML = ready.html
-    sourceText = ready.html
-    sourceBaseline = ready.html
+    if !isDraft { sourceText = candidate.html }
+    sourceBaseline = candidate.html
     wordCount = ready.wordCount
     headings = ready.outline ?? []
-    isDirty = ready.html != baselineSerializedHTML
+    updateDirtyState()
     errorMessage = nil
     loadCandidate = nil
     navigationFinishedID = nil
@@ -517,10 +697,12 @@ final class DocumentController: ObservableObject {
     draftLoadID = nil
     draftContinuation?.resume(returning: true)
     draftContinuation = nil
+    if isDraft { scheduleAutosave() }
     return true
   }
 
   private func performPendingAction() {
+    cancelScheduledAutosave()
     if let url = pendingURL {
       pendingURL = nil
       requestLoad(url)
@@ -541,18 +723,51 @@ final class DocumentController: ObservableObject {
     pendingQuit = false
   }
 
-  private func synchronizeFromEditor() async -> Bool {
+  private func synchronizeFromEditor(
+    applyHTML: Bool = true, reportFailure: ((String) -> Void)? = nil
+  ) async -> Bool {
     guard !isLoading else { return false }
     guard hasDocument, let editor else { return true }
-    guard await applySource() else { return false }
+    let session = sessionID
     do {
+      if applyHTML {
+        guard await applySource() else { return false }
+      } else {
+        try await flushCSSChanges()
+      }
+      guard session == sessionID, !isLoading else { return false }
+      guard sourceLanguage != .css || !hasSourceDraft else {
+        scheduleAutosave()
+        return false
+      }
+      if !applyHTML, exactHTML != nil {
+        updateDirtyState()
+        return true
+      }
+      let revision = editRevision
+      let sourceRevisionAtRead = sourceRevision
       let html = try await editor.serialize()
+      guard session == sessionID, !isLoading else { return false }
+      // A late bridge notification can describe this very snapshot. Accept it, but
+      // never accept an older page capture over newer page or source edits.
+      guard sourceRevisionAtRead == sourceRevision,
+        revision == editRevision || html == renderedHTML
+      else {
+        scheduleAutosave()
+        return false
+      }
+      if html != renderedHTML, !sourceVisible || sourceLanguage != .html { exactHTML = nil }
       renderedHTML = html
-      isDirty = html != baselineSerializedHTML || hasSourceDraft
+      updateDirtyState()
       return true
     } catch {
-      errorMessage =
+      let message =
         "Couldn't safely continue because the latest editor contents couldn't be read: \(error.localizedDescription)"
+      if let reportFailure {
+        reportFailure(message)
+      } else {
+        errorMessage = message
+      }
       return false
     }
   }

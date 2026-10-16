@@ -64,6 +64,9 @@ open dist/Kiln.app
 
 ## Use
 
+Autosave below is available in the current source build; the v0.4.1 download
+still uses manual Save.
+
 - **Open** (`⌘O`) a `.html` or `.htm` file, or open one with Kiln in Finder.
 - **Live Edit** lets you edit headings, paragraphs, list items, table cells, and
   text blocks in place. Press Enter in a list to continue it. Paste inserts plain
@@ -82,8 +85,10 @@ open dist/Kiln.app
   are not edited. Emptying the new override removes it.
 - **HTML** source offers native tag suggestions after `<` and `</`, or with
   Control-Space. It supports two-space Tab, indentation-preserving Enter, and
-  native undo/redo. **Apply HTML** refreshes the preview; Save and closing the
-  inspector also apply pending code. Applying HTML reloads the page and resets
+  native undo/redo. **Apply HTML** and closing the inspector refresh the preview.
+  Autosave and **Save** write source exactly as typed, including unfinished tags,
+  without applying it or resetting either editor's undo history.
+  Applying HTML reloads the page and resets
   the page's undo history. The page is read-only while the **HTML** tab is open
   so a full source draft cannot overwrite concurrent visual edits.
 - **Command palette** (`⌘P`) searches the available actions. Use the arrow keys
@@ -98,9 +103,20 @@ open dist/Kiln.app
   more menu. The app chrome and source editor adapt; imported pages keep their
   own colors. Pages with `prefers-color-scheme` styles, including the sample,
   respond to the chosen appearance. Kiln does not invert or rewrite your CSS.
-- **Save** (`⌘S`) writes to the open file. **Save As** (`⇧⌘S`) creates a copy.
-  There is no autosave. The built-in welcome page is a sample, not an original
-  file that Save will overwrite.
+- **Autosave** writes to the open file after about one second without edits.
+  **Save** (`⌘S`) saves immediately; **Save As** (`⇧⌘S`) creates a copy.
+  The toolbar shows Waiting to save, Saving, Saved, or Couldn’t save. Undo still
+  works after saving, and undoing an edit autosaves that change too.
+  The built-in welcome page asks for a location after your first edit; cancelling
+  leaves it unsaved without asking again. Use `⌘S` when ready. The bundled sample
+  is never overwritten automatically.
+- **Recovery copies** keep the version before your first save and the latest
+  draft for each editing session. **File → Show Recovery Copy in Finder** (also
+  in the more menu) selects `draft.html`; `original.html` and `location.txt` sit
+  beside it. Copies live in `~/Library/Application Support/Kiln/Recovery`, stay
+  local with owner-only permissions, and remain after quitting. Open a copy in
+  Kiln and Save As to restore it; restoration is not automatic. Copies do not
+  include relative assets, and are retained until you remove them yourself.
 - **Open in Browser** (`⌥⌘B`, globe button) asks for confirmation, saves the latest
   page and code edits, then opens that file in your default web browser. A failed
   or cancelled save never opens it. Unlike Kiln, the browser can run the file's
@@ -168,16 +184,20 @@ assets in the opened file's directory work offline. This means an interactive
 React app, JavaScript-rendered chart, or Tailwind CDN artifact may not render as
 intended. Export it as self-contained static HTML first.
 
-Saving preserves the DOM, styles, metadata, relative URLs, and inert script
-elements, but edited files are serialized by WebKit: source whitespace, entity
-spelling, quote style, and malformed markup can normalize. An unchanged file
-retains its original bytes. The source inspector changes HTML/CSS directly, but
-this is not a byte-preserving source editor, full IDE, or drag-and-drop page builder.
+Visual and CSS edits preserve the DOM, styles, metadata, relative URLs, and inert
+script elements, but are serialized by WebKit: source whitespace, entity spelling,
+quote style, and malformed markup can normalize. An unchanged file retains its
+original bytes. HTML source edits save exactly as typed until a subsequent visual
+or CSS edit requires serialization. This is not a full IDE or drag-and-drop page builder.
 
 UTF-8 files are supported. Keep nearby assets beside the HTML: Save As does not
 copy assets or rewrite relative URLs, so moving just the HTML to another folder
-can break those references. If another program changes an open file, Save refuses
-to overwrite it; Save As lets you preserve your edits separately.
+can break those references. If another program changes an open file, autosave
+pauses instead of overwriting it. A warning appears once; subsequent edits keep
+updating the recovery draft. Save As preserves your edits separately, or `⌘S`
+explicitly retries the same file (still refusing any external conflict). A
+recovery-write failure also prevents the original file from being overwritten.
+The last second of typing may not yet be on disk if the app or machine crashes.
 
 Scripts stay in exported HTML and can run when that file is opened in another
 browser. Kiln's offline editing mode is not an HTML sanitization service.

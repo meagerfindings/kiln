@@ -42,6 +42,9 @@ struct KilnApp: App {
             .keyboardShortcut(command.key, modifiers: command.modifiers)
             .disabled(!command.isEnabled(document))
         }
+        Divider()
+        Button("Show Recovery Copy in Finder") { document.revealRecovery() }
+          .disabled(document.recoveryURL == nil)
       }
       CommandGroup(replacing: .printItem) {
         Button("Command Palette…") { document.showCommandPalette = true }

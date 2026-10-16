@@ -196,6 +196,111 @@ final class DocumentIntegrationTests: XCTestCase {
   }
 
   @MainActor
+  func testAutosaveCombinesCSSAndPageEditsWithoutResettingNativeUndo() async throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "kiln-autosave-\(UUID())")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("note.html")
+    let original = Data("<style>p { color: red; }</style><p>Original copy</p>".utf8)
+    try original.write(to: file)
+    let document = DocumentController(recoveryDirectory: folder.appendingPathComponent("recovery"))
+    let harness = NativeDocumentHarness(document: document)
+    defer { harness.close() }
+    document.requestOpen(file)
+    try await harness.waitUntil { document.hasDocument && !document.isLoading }
+    let loadID = document.loadRequest?.id
+    await document.showSource(.css)
+    document.editSource("p { color: rgb(31, 81, 41); }")
+    let web = try XCTUnwrap(harness.web)
+    harness.window.makeFirstResponder(web)
+    _ = try await harness.js(
+      """
+      (() => { const p = document.querySelector('p'); p.focus();
+        const r = document.createRange(); r.selectNodeContents(p); r.collapse(false);
+        getSelection().removeAllRanges(); getSelection().addRange(r); })()
+      """)
+    web.insertText(" — revised")
+    try await harness.waitUntil {
+      let html = try String(contentsOf: file, encoding: .utf8)
+      return html.contains("Original copy — revised") && html.contains("rgb(31, 81, 41)")
+        && !document.isDirty
+    }
+    XCTAssertEqual(document.saveState, "Saved")
+    XCTAssertEqual(document.loadRequest?.id, loadID)
+    XCTAssertTrue(web.undoManager?.canUndo == true)
+    web.undoManager?.undo()
+    try await harness.waitUntil {
+      let html = try String(contentsOf: file, encoding: .utf8)
+      return !html.contains("revised") && html.contains("Original copy")
+        && html.contains("rgb(31, 81, 41)") && !document.isDirty
+    }
+    let recovery = try XCTUnwrap(document.recoveryURL)
+    XCTAssertEqual(try Data(contentsOf: recovery.appendingPathComponent("original.html")), original)
+    XCTAssertEqual(
+      try Data(contentsOf: recovery.appendingPathComponent("draft.html")),
+      try Data(contentsOf: file))
+    XCTAssertNil(document.saveProblem)
+  }
+
+  @MainActor
+  func testHTMLAutosavesExactSourceWithoutReloadingOrResettingSourceUndo() async throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "kiln-source-save-\(UUID())")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("note.html")
+    let original = "<!doctype html>\n<p class='copy'>Before &amp; after</p>\n"
+    try Data(original.utf8).write(to: file)
+    let document = DocumentController(recoveryDirectory: folder.appendingPathComponent("recovery"))
+    let harness = NativeDocumentHarness(document: document)
+    defer { harness.close() }
+    document.requestOpen(file)
+    try await harness.waitUntil { document.hasDocument && !document.isLoading }
+    await document.showSource(.html)
+    let loadID = document.loadRequest?.id
+    try await harness.waitUntil {
+      NativeDocumentHarness.descendant(NSTextView.self, in: harness.view) != nil
+    }
+    let code = try XCTUnwrap(NativeDocumentHarness.descendant(NSTextView.self, in: harness.view))
+    harness.window.makeFirstResponder(code)
+    let draft = "<!doctype html>\n<p class='copy'>Café &amp; tea</p>\n<!-- still typing"
+    code.setSelectedRange(NSRange(location: 0, length: (code.string as NSString).length))
+    code.insertText(draft, replacementRange: code.selectedRange())
+    code.breakUndoCoalescing()
+    let caret = code.selectedRange()
+    try await harness.waitUntil {
+      try String(contentsOf: file, encoding: .utf8) == draft && !document.isDirty
+    }
+    XCTAssertEqual(document.loadRequest?.id, loadID)
+    XCTAssertEqual(code.string, draft)
+    XCTAssertEqual(code.selectedRange(), caret)
+    XCTAssertTrue(document.hasSourceDraft, "Saving is not the same thing as applying the preview")
+    let page = try await harness.js("document.querySelector('p').textContent") as? String
+    XCTAssertEqual(page, "Before & after")
+
+    XCTAssertTrue(code.undoManager?.canUndo == true)
+    code.undoManager?.undo()
+    try await harness.waitUntil {
+      try String(contentsOf: file, encoding: .utf8) == original && !document.isDirty
+    }
+    code.undoManager?.redo()
+    try await harness.waitUntil {
+      try String(contentsOf: file, encoding: .utf8) == draft && !document.isDirty
+    }
+    let applied = await document.applySource()
+    XCTAssertTrue(applied)
+    XCTAssertEqual(document.sourceText, draft, "Applying must not rewrite the user's source buffer")
+    XCTAssertFalse(document.hasSourceDraft)
+    XCTAssertFalse(document.isDirty)
+    await document.closeSource()
+    let saved = await document.save()
+    XCTAssertTrue(saved)
+    XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), draft)
+    XCTAssertNil(document.saveProblem)
+  }
+
+  @MainActor
   func testCSSAndPageEditsCoexistAndLockProtectsBothEditors() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(
       "kiln-live-\(UUID()).html")

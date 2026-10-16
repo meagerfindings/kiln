@@ -84,8 +84,8 @@ struct SourcePanel: View {
         }
         Text(
           document.sourceLanguage == .css
-            ? "Embedded styles only. Linked CSS files stay untouched. ⌘S saves the HTML."
-            : "Tag suggestions: type < or press ⌃Space. Applying HTML refreshes page undo history."
+            ? "Autosaves with your HTML. Linked CSS files stay untouched. ⌘S saves now."
+            : "Autosaves exactly as typed. Apply refreshes page undo history; saving does not. Tags: ⌃Space."
         )
         .font(.system(size: 10))
         .foregroundStyle(theme.muted)

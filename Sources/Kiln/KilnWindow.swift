@@ -101,6 +101,8 @@ struct KilnWindow: View {
         HStack(spacing: 5) {
           Circle().fill(document.isDirty ? Color.orange : sage).frame(width: 6, height: 6)
           Text(document.saveState).font(.system(size: 10)).foregroundStyle(mutedInk)
+            .accessibilityIdentifier("saveStatus")
+            .help(document.saveProblem ?? "Autosaves after one second of inactivity. ⌘S saves now.")
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -195,6 +197,8 @@ struct KilnWindow: View {
         Button("Save As…") { Task { _ = await document.saveAs() } }
           .keyboardShortcut("s", modifiers: [.command, .shift])
           .disabled(!EditorCommand.saveAs.isEnabled(document))
+        Button("Show Recovery Copy in Finder") { document.revealRecovery() }
+          .disabled(document.recoveryURL == nil)
         Button(document.isEditingLocked ? "Unlock Editing" : "Lock Editing") {
           document.setEditingLocked(!document.isEditingLocked)
         }
@@ -312,9 +316,20 @@ struct KilnWindow: View {
 
   private var footer: some View {
     HStack {
-      Text(document.fileActionStatus ?? editingHint)
-        .font(.system(size: 10))
-        .foregroundStyle(mutedInk)
+      Text(
+        document.saveProblem == nil
+          ? (document.fileActionStatus ?? editingHint)
+          : "Autosave paused · Your edits are still here"
+      )
+      .font(.system(size: 10))
+      .foregroundStyle(document.saveProblem == nil ? mutedInk : Color.orange)
+      .help(document.saveProblem ?? "")
+      if document.saveProblem != nil {
+        Button("Save As…") { Task { _ = await document.saveAs() } }
+          .disabled(!EditorCommand.saveAs.isEnabled(document))
+        Button("Recovery copy") { document.revealRecovery() }
+          .disabled(document.recoveryURL == nil)
+      }
       Spacer()
       Text("\(document.wordCount) words")
         .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -329,11 +344,12 @@ struct KilnWindow: View {
   private var editingHint: String {
     if document.isFileActionBusy { return "Opening the saved file in your browser…" }
     if document.isEditingLocked { return "Editing locked · ⌥⌘L to unlock" }
+    if document.fileURL == nil { return "Choose a save location to start autosaving · ⌘S" }
     if document.sourceVisible && document.sourceLanguage == .html {
-      return "HTML draft · Close code to edit the page"
+      return "HTML autosaves as typed · Apply to refresh the page"
     }
-    if document.sourceVisible { return "Edit the page or CSS · Changes stay on this device" }
-    return "Click text to edit · Changes stay on this device"
+    if document.sourceVisible { return "Edit the page or CSS · Autosaves locally" }
+    return "Click text to edit · Autosaves locally"
   }
 }
 
