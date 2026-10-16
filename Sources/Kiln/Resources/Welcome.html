@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A little less friction — Kiln</title>
+  <style>
+    :root { color-scheme: light; --ink: #292d29; --muted: #777b72; --green: #526b54; --line: #e5e7df; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #fcfcf8; color: var(--ink); -webkit-font-smoothing: antialiased; font: 16px/1.75 -apple-system, BlinkMacSystemFont, sans-serif; }
+    main { max-width: 800px; padding: 62px 72px 48px; margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 42px; }
+    .eyebrow { color: var(--green); font-size: 10px; font-weight: 650; letter-spacing: 2.3px; text-transform: uppercase; }
+    .edition { color: #989c91; font-size: 11px; letter-spacing: .5px; }
+    h1 { font: 400 54px/1.1 Georgia, 'Times New Roman', serif; letter-spacing: -2px; margin: 0 0 23px; max-width: 550px; }
+    .intro { font: 20px/1.55 Georgia, 'Times New Roman', serif; color: #787d70; margin-bottom: 38px; }
+    hr { border: 0; border-top: 1px solid var(--line); margin: 34px 0; }
+    h2 { font: 400 26px/1.3 Georgia, 'Times New Roman', serif; letter-spacing: -.45px; margin: 28px 0 14px; }
+    p { margin: 12px 0; }
+    .subtle { color: #747a6e; font-size: 14px; }
+    ul { list-style: disc; padding-left: 21px; margin: 18px 0 28px; }
+    li { padding-left: 8px; margin: 10px 0; }
+    li::marker { color: #81937b; font-size: 11px; }
+    strong { font-weight: 600; }
+    .note { margin: 30px 0; padding: 18px 24px; background: #f0f2e9; border-left: 2px solid #93a087; border-radius: 0 4px 4px 0; }
+    .note p { margin: 0; color: #637159; font: italic 17px/1.6 Georgia, serif; }
+    footer { display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 22px; margin-top: 38px; font-size: 11px; color: #989c91; }
+    kbd { font: 11px -apple-system, sans-serif; border: 1px solid #dfe3d6; border-radius: 4px; padding: 2px 5px; background: #f7f8f1; }
+    @media (max-width: 650px) { main { padding: 38px 28px; } h1 { font-size: 42px; } header { margin-bottom: 30px; } }
+    @media (prefers-color-scheme: dark) {
+      :root { color-scheme: dark; --ink: #e4e8df; --muted: #a2ad9f; --green: #a4bc98; --line: #343d32; }
+      body { background: #1a201b; }
+      .intro, .subtle { color: #a8b29f; }
+      .edition, footer { color: #8f9c89; }
+      .note { background: #252f25; border-color: #809773; }
+      .note p { color: #b1c3a6; }
+      kbd { background: #242d24; border-color: #46513f; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header><span class="eyebrow">A field note from Kiln</span><span class="edition">No. 001 / Getting started</span></header>
+    <h1>A little less friction.<br>A little more flow.</h1>
+    <p class="intro">The page is the editor. Your words belong right where you can see them.</p>
+    <hr>
+    <h2>Make yourself at home</h2>
+    <p>Your agent got you most of the way there. Now make it yours. Click this sentence and change a few words — the design stays out of your way.</p>
+    <ul>
+      <li>Click into any paragraph, heading, or list.</li>
+      <li>Put the cursor here and press <strong>Enter</strong> to add a bullet.</li>
+      <li>Select a few words, then try <strong>⌘B</strong> or <em>⌘I</em>.</li>
+    </ul>
+    <div class="note"><p>No source pane. No rebuild. Just you and the finishing touches.</p></div>
+    <h2>Bring your own page</h2>
+    <p class="subtle">Open a local HTML file with <kbd>⌘O</kbd>. Kiln keeps its layout, styles, and nearby images. Lock editing with <kbd>⌥⌘L</kbd> to read without a caret, or use the globe to open your saved page in a browser.</p>
+    <footer><span>Made for the human part of the process.</span><span>Yours, by design.</span></footer>
+  </main>
+</body>
+</html>
