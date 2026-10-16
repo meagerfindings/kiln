@@ -98,6 +98,30 @@ open dist/Kiln.app
   **Copy File Path** (`⌥⌘C`) copies its absolute path as plain text. Both have toolbar
   buttons and require a saved file; neither silently saves pending edits.
 
+### Markdown typing shortcuts
+
+Type Markdown directly on the editable page; Kiln turns the shortcut into HTML
+without switching modes:
+
+| Type | Result |
+| --- | --- |
+| `#` through `######`, then Space at the start of a paragraph or heading | Heading 1–6 |
+| `**bold**` or `__bold__`, then Space | `<strong>bold</strong>` |
+| `*italic*` or `_italic_`, then Space | `<em>italic</em>` |
+| `-` or `*`, then Space at the start of a paragraph | Bulleted list |
+| `1.`, then Space at the start of a paragraph | Numbered list |
+
+Space confirms the shortcut and leaves subsequent typing outside the emphasis.
+Immediately undo (`⌘Z`) to keep the literal Markdown instead; redo reapplies it.
+Headings keep their existing attributes and content, and the HTML remains styled
+by your document's CSS.
+
+These are typing shortcuts, not a Markdown importer or a full CommonMark parser.
+Existing document text, pasted Markdown, code blocks, and backslash-escaped
+markers are not automatically converted. Inline shortcuts work within a single
+plain-text run; nested or cross-element Markdown is not parsed. The HTML/CSS
+source inspector stays a literal code editor.
+
 ### Keyboard shortcuts
 
 | Action | Shortcut |
@@ -123,8 +147,9 @@ bindings follow familiar Mac document-editor conventions where practical.
 
 Static HTML artifacts: reports, briefs, proposals, documentation, and designed
 pages. Native SwiftUI/AppKit supplies the window and file dialogs; WebKit renders
-the original HTML/CSS and supplies editing and undo. There is deliberately no
-Markdown conversion or editor-specific document format.
+the original HTML/CSS and supplies editing and undo. Markdown typing shortcuts
+produce ordinary HTML; there is no intermediate Markdown document or
+editor-specific file format.
 
 Artifact JavaScript never runs inside Kiln. Remote resources are blocked,
 including CDN stylesheets, fonts, images, and scripts. Inline styles and relative

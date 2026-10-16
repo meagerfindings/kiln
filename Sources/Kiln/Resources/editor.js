@@ -14,6 +14,7 @@
   let editing = false;
   let styleElement = null;
   let changeTimer = 0;
+  let isPasting = false;
 
   function rememberAttribute(element, name) {
     let attributes = attributeSnapshots.get(element);
@@ -432,13 +433,106 @@
     selection.addRange(caret);
   }
 
+  function moveCaret(node, offset) {
+    node.parentElement?.closest('[data-kiln-editing="true"]')?.focus();
+    const caret = document.createRange();
+    caret.setStart(node, offset);
+    caret.collapse(true);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(caret);
+  }
+
+  function markdownBlock(node, offset) {
+    const prefix = node.data.slice(0, offset);
+    const match = /^(#{1,6}|[-*]|1\.)[ \u00a0]$/.exec(prefix);
+    const block = node.parentElement;
+    if (!match || !block.matches('p, h1, h2, h3, h4, h5, h6') || block.firstChild !== node) return;
+    const heading = match[1].startsWith('#');
+    if (!heading && (block.localName !== 'p' || block.closest('li'))) return;
+
+    const originalText = node.data;
+    const replacement = heading
+      ? cleanReplacement(block, `h${match[1].length}`)
+      : document.createElement(match[1] === '1.' ? 'ol' : 'ul');
+    const item = heading ? null : document.createElement('li');
+    if (item) replacement.append(item);
+    const placeholder = document.createElement('br');
+    recordStructuralChange(heading ? 'Markdown Heading' : 'Markdown List', forward => {
+      placeholder.remove();
+      node.data = forward ? originalText.slice(offset) : originalText;
+      if (heading) {
+        const from = forward ? block : replacement;
+        const to = forward ? replacement : block;
+        to.append(...from.childNodes);
+        from.replaceWith(to);
+      } else if (forward) {
+        block.before(replacement);
+        item.append(block);
+      } else replacement.replaceWith(block);
+      const textBlock = node.parentElement;
+      if (!node.data && textBlock.childNodes.length === 1) textBlock.append(placeholder);
+      setEditing(editing);
+      moveCaret(node, forward ? 0 : offset);
+    });
+    return true;
+  }
+
+  function markdownInline(node, offset) {
+    // Keep the confirming space outside the emphasis. An empty trailing text node
+    // is not a stable caret boundary in WebKit and makes subsequent typing bold/italic.
+    const before = node.data.slice(0, offset - 1);
+    // Word boundaries avoid turning identifiers or unfinished double markers into emphasis.
+    const rules = [
+      { pattern: /(^|[\s([{"'“—])\*\*([^\s*](?:[^*\r\n]*[^\s*])?)\*\*$/, tag: 'strong', width: 2 },
+      { pattern: /(^|[\s([{"'“—])__([^\s_](?:[^_\r\n]*[^\s_])?)__$/, tag: 'strong', width: 2 },
+      { pattern: /(^|[\s([{"'“—])\*([^\s*](?:[^*\r\n]*[^\s*])?)\*$/, tag: 'em', width: 1 },
+      { pattern: /(^|[\s([{"'“—])_([^\s_](?:[^_\r\n]*[^\s_])?)_$/, tag: 'em', width: 1 }
+    ];
+    for (const { pattern, tag, width } of rules) {
+      const match = pattern.exec(before);
+      if (!match || /[\\`]/.test(match[2])) continue;
+      const start = offset - 1 - match[2].length - width * 2;
+      const leading = document.createTextNode(node.data.slice(0, start));
+      const trailing = document.createTextNode(node.data.slice(offset - 1));
+      const formatted = document.createElement(tag);
+      formatted.textContent = match[2];
+      // Keep the original text node intact for WebKit's earlier typing undo entries.
+      recordStructuralChange(tag === 'strong' ? 'Markdown Bold' : 'Markdown Italic', forward => {
+        if (forward) node.replaceWith(leading, formatted, trailing);
+        else {
+          leading.replaceWith(node);
+          formatted.remove();
+          trailing.remove();
+        }
+        moveCaret(forward ? trailing : node, forward ? 1 : offset);
+      });
+      return;
+    }
+  }
+
+  function applyMarkdownShortcut(event) {
+    if (isPasting || event.isComposing || event.inputType !== 'insertText' || event.data !== ' ') return;
+    const selection = getSelection();
+    if (!selection?.isCollapsed || !selection.rangeCount) return;
+    const node = selection.anchorNode;
+    if (node?.nodeType !== Node.TEXT_NODE ||
+        node.parentElement.closest('pre, code, kbd, samp, script, style, [contenteditable="false"]')) return;
+    if (!markdownBlock(node, selection.anchorOffset)) markdownInline(node, selection.anchorOffset);
+  }
+
   document.addEventListener('keydown', splitParagraphListItem, true);
 
   document.addEventListener('paste', event => {
     if (!editing || !editingHosts.size) return;
     event.preventDefault();
     const text = event.clipboardData?.getData('text/plain') ?? '';
-    if (text) document.execCommand('insertText', false, text);
+    isPasting = true;
+    try {
+      if (text) document.execCommand('insertText', false, text);
+    } finally {
+      isPasting = false;
+    }
   }, true);
 
   for (const eventName of ['click', 'auxclick']) {
@@ -453,6 +547,7 @@
     if (!editing) return;
     const target = event.target;
     if (target instanceof Node && Array.from(editingHosts).some(host => host === target || host.contains(target))) {
+      applyMarkdownShortcut(event);
       scheduleChange();
     }
   }, true);

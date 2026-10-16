@@ -244,6 +244,244 @@ final class KilnWebKitIntegrationTests: XCTestCase {
   }
 
   @MainActor
+  func testMarkdownHeadingAndListShortcutsPreserveDocumentContent() async throws {
+    let harness = EditorHarness(testCase: self, source: try EditorHarness.editorSource())
+    defer { harness.stop() }
+    try await harness.load(
+      html: """
+        <!doctype html><html><body>
+        <p id="heading-1" class="keep one">one remains</p>
+        <p id="heading-2" class="keep two">two <em>remains</em></p>
+        <p id="heading-3" class="keep three">three remains</p>
+        <p id="heading-4" class="keep four">four remains</p>
+        <p id="heading-5" class="keep five">five remains</p>
+        <h2 id="heading-6" class="keep six">six remains</h2>
+        <p id="loaded">## existing document text</p>
+        <p id="dash">dash item</p>
+        <p id="star">star item</p>
+        <p id="ordered">ordered item</p>
+        </body></html>
+        """)
+    try await harness.waitForReady()
+    try await harness.beginEditing()
+
+    let classSuffixes = ["one", "two", "three", "four", "five", "six"]
+    for level in 1...6 {
+      try await harness.placeCaret(in: "#heading-\(level)")
+      try await harness.type(String(repeating: "#", count: level) + " ")
+      await harness.assertString(
+        "document.querySelector('#heading-\(level)').localName", equals: "h\(level)")
+      await harness.assertString(
+        "document.querySelector('#heading-\(level)').textContent",
+        equals: "\(classSuffixes[level - 1]) remains")
+      await harness.assertString(
+        "document.querySelector('#heading-\(level)').getAttribute('class')",
+        equals: "keep \(classSuffixes[level - 1])")
+    }
+    await harness.assertString(
+      "document.querySelector('#heading-2 em').textContent", equals: "remains")
+    XCTAssertTrue(harness.undo())
+    await harness.assertString("document.querySelector('#heading-6').localName", equals: "h2")
+    await harness.assertString(
+      "document.querySelector('#heading-6').textContent", equals: "###### six remains")
+    XCTAssertTrue(harness.redo())
+    await harness.assertString("document.querySelector('#heading-6').localName", equals: "h6")
+    await harness.assertString("document.querySelector('#loaded').localName", equals: "p")
+    await harness.assertString(
+      "document.querySelector('#loaded').textContent", equals: "## existing document text")
+
+    for (id, shortcut, list, itemText) in [
+      ("dash", "- ", "ul", "dash item"),
+      ("star", "* ", "ul", "star item"),
+      ("ordered", "1. ", "ol", "ordered item"),
+    ] {
+      try await harness.placeCaret(in: "#\(id)")
+      try await harness.type(shortcut)
+      await harness.assertString(
+        "document.querySelector('#\(id)').closest('ul, ol').localName", equals: list)
+      await harness.assertString(
+        "document.querySelector('#\(id)').textContent", equals: itemText)
+      await harness.assertTrue("document.querySelector('#\(id)').closest('li') !== null")
+    }
+
+    guard let exported = try await harness.string("window.kiln.serialize()") else {
+      XCTFail("serialize() returned no HTML after Markdown block shortcuts")
+      return
+    }
+    for snippet in [
+      "<h6 id=\"heading-6\" class=\"keep six\">six remains</h6>",
+      "<ul", "<ol", "dash item", "star item", "ordered item",
+    ] {
+      XCTAssertTrue(exported.contains(snippet), "Serialized HTML lost \(snippet)")
+    }
+    XCTAssertFalse(exported.contains("data-kiln-editing"))
+  }
+
+  @MainActor
+  func testMarkdownInlineShortcutsAreSemanticAndUndoable() async throws {
+    let harness = EditorHarness(testCase: self, source: try EditorHarness.editorSource())
+    defer { harness.stop() }
+    try await harness.load(
+      html: """
+        <!doctype html><html><body>
+        <p id="double-star"></p><p id="double-underscore"></p>
+        <p id="single-star"></p><p id="single-underscore"></p>
+        <p id="html-text"></p><p id="weighted" style="font-weight: 700"></p>
+        </body></html>
+        """)
+    try await harness.waitForReady()
+    try await harness.beginEditing()
+
+    try await harness.placeCaret(in: "#double-star")
+    try await harness.type("**bold**")
+    let boldText = "document.querySelector('#double-star').textContent.replace(/\\u00a0/g, ' ')"
+    await harness.assertString(boldText, equals: "**bold**")
+    try await harness.type(" ")
+    await harness.assertString(
+      "document.querySelector('#double-star > strong').textContent", equals: "bold")
+    await harness.assertString(boldText, equals: "bold ")
+    XCTAssertTrue(harness.undo(), "Native Undo should restore the literal Markdown shortcut")
+    await harness.assertString(boldText, equals: "**bold** ")
+    await harness.assertNumber(
+      "document.querySelectorAll('#double-star > strong').length", equals: 0)
+    XCTAssertTrue(harness.redo(), "Native Redo should reapply the Markdown shortcut")
+    await harness.assertString(
+      "document.querySelector('#double-star > strong').textContent", equals: "bold")
+    try await harness.type("next")
+    await harness.assertString(boldText, equals: "bold next")
+    await harness.assertString(
+      "document.querySelector('#double-star > strong').textContent", equals: "bold")
+    XCTAssertTrue(harness.undo())
+    await harness.assertString(boldText, equals: "bold ")
+    XCTAssertTrue(harness.undo())
+    await harness.assertString(boldText, equals: "**bold** ")
+    XCTAssertTrue(harness.redo())
+    await harness.assertString(
+      "document.querySelector('#double-star > strong').textContent", equals: "bold")
+    XCTAssertTrue(harness.redo())
+    await harness.assertString(boldText, equals: "bold next")
+
+    for (id, markdown, tag, text) in [
+      ("double-underscore", "__bold__", "strong", "bold"),
+      ("single-star", "*italic*", "em", "italic"),
+      ("single-underscore", "_italic_", "em", "italic"),
+      (
+        "html-text", "**<img src=x onerror=document.documentElement.dataset.payloadRan=1>**",
+        "strong", "<img src=x onerror=document.documentElement.dataset.payloadRan=1>"
+      ),
+    ] {
+      try await harness.placeCaret(in: "#\(id)")
+      try await harness.type(markdown + " ")
+      await harness.assertString(
+        "document.querySelector('#\(id) > \(tag)').textContent", equals: text)
+      await harness.assertString(
+        "document.querySelector('#\(id)').textContent.replace(/\\u00a0/g, ' ')", equals: text + " ")
+    }
+    await harness.assertNumber("document.querySelectorAll('#html-text img').length", equals: 0)
+    await harness.assertFalse("document.documentElement.hasAttribute('data-payload-ran')")
+    try await harness.placeCaret(in: "#weighted")
+    try await harness.type("**heavy** next")
+    await harness.assertString(
+      "document.querySelector('#weighted').textContent.replace(/\\u00a0/g, ' ')",
+      equals: "heavy next")
+    await harness.assertString(
+      "document.querySelector('#weighted strong').textContent", equals: "heavy")
+    await harness.assertString(
+      "getComputedStyle(getSelection().anchorNode.parentElement).fontWeight", equals: "700")
+
+    guard let exported = try await harness.string("window.kiln.serialize()") else {
+      XCTFail("serialize() returned no HTML after inline Markdown shortcuts")
+      return
+    }
+    XCTAssertTrue(exported.contains("<strong>bold</strong>"))
+    XCTAssertTrue(exported.contains("<em>italic</em>"))
+    XCTAssertFalse(exported.contains("**bold**"))
+    XCTAssertFalse(exported.contains("__bold__"))
+    XCTAssertFalse(exported.contains("*italic*"))
+    XCTAssertFalse(exported.contains("_italic_"))
+  }
+
+  @MainActor
+  func testMarkdownShortcutsIgnoreLiteralContextsAndPlainTextPaste() async throws {
+    let harness = EditorHarness(testCase: self, source: try EditorHarness.editorSource())
+    defer { harness.stop() }
+    try await harness.load(
+      html: """
+        <!doctype html><html><body>
+        <pre id="pre"></pre><p><code id="code">left right</code></p>
+        <p id="escaped"></p><p id="intraword"></p><p id="incomplete"></p>
+        <p id="locked"></p><p id="paste"></p><p id="paste-close">**keep**</p>
+        </body></html>
+        """)
+    try await harness.waitForReady()
+    try await harness.beginEditing()
+
+    for (selector, text, expected) in [
+      ("#pre", "**code** ", "**code** "),
+      ("#code", "**code** ", "left**code**  right"),
+      ("#escaped", "\\**escaped** ", "\\**escaped** "),
+      ("#intraword", "word_under_score_ ", "word_under_score_ "),
+      ("#incomplete", "**unfinished ", "**unfinished "),
+    ] {
+      try await harness.placeCaret(in: selector, textOffset: selector == "#code" ? 4 : nil)
+      try await harness.type(text)
+      await harness.assertString(
+        "document.querySelector('\(selector)').textContent.replace(/\\u00a0/g, ' ')",
+        equals: expected)
+      await harness.assertNumber(
+        "document.querySelectorAll('\(selector) strong, \(selector) em').length", equals: 0)
+    }
+
+    try await harness.evaluate("window.kiln.setEditing(false)")
+    try await harness.placeCaret(in: "#locked")
+    try await harness.type("# locked")
+    await harness.assertString("document.querySelector('#locked').textContent", equals: "")
+    await harness.assertString("document.querySelector('#locked').localName", equals: "p")
+
+    try await harness.beginEditing()
+    try await harness.placeCaret(in: "#paste")
+    let pasted = "**<img src=x onerror=document.documentElement.dataset.payloadRan=1>**"
+    let pasteLiteral = try Self.javaScriptLiteral(pasted)
+    try await harness.evaluate(
+      """
+      const target = document.querySelector('#paste');
+      const transfer = new DataTransfer();
+      transfer.setData('text/plain', \(pasteLiteral));
+      transfer.setData('text/html', \(pasteLiteral));
+      target.dispatchEvent(new ClipboardEvent('paste', {
+        bubbles: true, cancelable: true, clipboardData: transfer
+      }));
+      """)
+    await harness.assertString("document.querySelector('#paste').textContent", equals: pasted)
+    await harness.assertNumber("document.querySelectorAll('#paste img').length", equals: 0)
+    await harness.assertNumber(
+      "document.querySelectorAll('#paste strong, #paste em').length", equals: 0)
+    try await Task.sleep(nanoseconds: 200_000_000)
+    await harness.assertFalse("document.documentElement.hasAttribute('data-payload-ran')")
+    guard let exported = try await harness.string("window.kiln.serialize()") else {
+      XCTFail("serialize() returned no HTML after a Markdown-looking plain-text paste")
+      return
+    }
+    XCTAssertTrue(exported.contains("**&lt;img"))
+    XCTAssertTrue(exported.contains("&gt;**"))
+    XCTAssertFalse(exported.contains("<img"))
+
+    try await harness.placeCaret(in: "#paste-close", textOffset: 8)
+    try await harness.evaluate(
+      """
+      const transfer = new DataTransfer();
+      transfer.setData('text/plain', ' ');
+      document.querySelector('#paste-close').dispatchEvent(new ClipboardEvent('paste', {
+        bubbles: true, cancelable: true, clipboardData: transfer
+      }));
+      """)
+    await harness.assertString(
+      "document.querySelector('#paste-close').textContent.replace(/\\u00a0/g, ' ')",
+      equals: "**keep** ")
+    await harness.assertNumber("document.querySelectorAll('#paste-close strong').length", equals: 0)
+  }
+
+  @MainActor
   func testPasteReplacesSelectedTextWithoutInterpretingHTML() async throws {
     let harness = EditorHarness(testCase: self, source: try EditorHarness.editorSource())
     defer { harness.stop() }
@@ -601,6 +839,30 @@ private final class EditorHarness: NSObject, WKScriptMessageHandler {
         ])
     }
     try await evaluate("window.kiln.setEditing(true)")
+  }
+
+  func placeCaret(in selector: String, textOffset: Int? = nil) async throws {
+    let serializedSelector = try JSONSerialization.data(
+      withJSONObject: selector, options: [.fragmentsAllowed])
+    let selectorLiteral = String(decoding: serializedSelector, as: UTF8.self)
+    try await evaluate(
+      """
+      const target = document.querySelector(\(selectorLiteral));
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      \(textOffset.map { "range.setStart(target.firstChild, \($0));" } ?? "")
+      range.collapse(true);
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      """)
+  }
+
+  func type(_ text: String) async throws {
+    for character in text {
+      let literal = String(decoding: try JSONEncoder().encode(String(character)), as: UTF8.self)
+      try await evaluate("document.execCommand('insertText', false, \(literal))")
+    }
   }
 
   func undo() -> Bool {
