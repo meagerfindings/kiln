@@ -35,6 +35,11 @@ struct KilnEditorView: NSViewRepresentable {
     configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
 
     let webView = WKWebView(frame: .zero, configuration: configuration)
+    do {
+      try NativeSpelling.configure(webView)
+    } catch {
+      document.errorMessage = "Couldn't configure spell-check: \(error.localizedDescription)"
+    }
     webView.navigationDelegate = context.coordinator
     webView.uiDelegate = context.coordinator
     context.coordinator.webView = webView

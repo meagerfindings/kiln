@@ -3,6 +3,8 @@
 
   const handler = window.webkit?.messageHandlers?.kiln;
   const attributeSnapshots = new Map();
+  let snapshotAttribute = 'data-kiln-snapshot';
+  while (document.querySelector(`[${snapshotAttribute}]`)) snapshotAttribute += '-';
   const editingHosts = new Set();
   const structuralChanges = new Map();
   const stylesheetMetadata = new WeakMap();
@@ -16,11 +18,20 @@
   let changeTimer = 0;
   let isPasting = false;
 
+  function originalAttributes(element) {
+    return attributeSnapshots.get(element.getAttribute(snapshotAttribute));
+  }
+
   function rememberAttribute(element, name) {
-    let attributes = attributeSnapshots.get(element);
+    let attributes = originalAttributes(element);
     if (!attributes) {
       attributes = new Map();
-      attributeSnapshots.set(element, attributes);
+      const id = String(attributeSnapshots.size);
+      attributeSnapshots.set(id, attributes);
+      // WebKit clones elements when splitting paragraphs. Carry their original
+      // attributes with them so editor-only spelling hints never reach exports.
+      attributes.set(snapshotAttribute, null);
+      element.setAttribute(snapshotAttribute, id);
     }
     if (!attributes.has(name)) attributes.set(name, element.getAttribute(name));
   }
@@ -96,14 +107,19 @@
     for (const host of editingCandidates()) {
       setOwnedAttribute(host, 'contenteditable', 'true');
       setOwnedAttribute(host, 'data-kiln-editing', 'true');
+      setOwnedAttribute(host, 'spellcheck', 'true');
+      setOwnedAttribute(host, 'autocorrect', 'off');
       for (const child of host.querySelectorAll('[contenteditable]')) {
-        const saved = attributeSnapshots.get(child);
+        const saved = originalAttributes(child);
         if (!saved?.has('contenteditable')) continue;
         const original = saved.get('contenteditable');
         if (original === null) child.removeAttribute('contenteditable');
         else child.setAttribute('contenteditable', original);
       }
       editingHosts.add(host);
+    }
+    for (const code of document.querySelectorAll('pre, code, kbd, samp')) {
+      setOwnedAttribute(code, 'spellcheck', 'false');
     }
   }
 
@@ -146,9 +162,9 @@
     const clone = document.cloneNode(true);
     const cloneByOriginal = new Map();
     cloneNodeMap(document, clone, cloneByOriginal);
-    for (const [element, attributes] of attributeSnapshots) {
-      const copy = cloneByOriginal.get(element);
-      if (!(copy instanceof Element)) continue;
+    for (const copy of clone.querySelectorAll(`[${snapshotAttribute}]`)) {
+      const attributes = originalAttributes(copy);
+      if (!attributes) continue;
       for (const [name, value] of attributes) {
         if (value === null) copy.removeAttribute(name);
         else copy.setAttribute(name, value);
@@ -302,7 +318,7 @@
   function cleanReplacement(original, tag) {
     const replacement = document.createElement(tag);
     for (const attribute of original.attributes) replacement.setAttribute(attribute.name, attribute.value);
-    for (const [name, value] of attributeSnapshots.get(original) ?? []) {
+    for (const [name, value] of originalAttributes(original) ?? []) {
       if (value === null) replacement.removeAttribute(name);
       else replacement.setAttribute(name, value);
     }

@@ -168,6 +168,96 @@ final class KilnWebKitIntegrationTests: XCTestCase {
   }
 
   @MainActor
+  func testSpellcheckEditingHintsAreTemporaryAndPreserveOriginalAttributes() async throws {
+    let harness = EditorHarness(testCase: self, source: try EditorHarness.editorSource())
+    defer { harness.stop() }
+    try await harness.load(
+      html: """
+        <!doctype html><html><body>
+        <p id="plain">plain text</p>
+        <p id="explicit-prose" spellcheck="false" autocorrect="on" data-kiln-snapshot="author">explicit prose</p>
+        <pre id="pre" spellcheck="true" autocorrect="on"><code id="code" spellcheck="true" autocorrect="on">code sample</code></pre>
+        <kbd id="kbd">key</kbd><samp id="samp">output</samp>
+        <p id="split"><code>left right</code></p>
+        <ul id="split-list"><li><p><code spellcheck="true">third fourth</code></p></li></ul>
+        </body></html>
+        """)
+    try await harness.waitForReady()
+    guard let before = try await harness.string("window.kiln.serialize()") else {
+      XCTFail("serialize() returned no HTML before spellcheck mode changes")
+      return
+    }
+
+    harness.resetChange()
+    try await harness.beginEditing()
+    await harness.assertString(
+      "document.querySelector('#plain').getAttribute('spellcheck')", equals: "true")
+    await harness.assertString(
+      "document.querySelector('#plain').getAttribute('autocorrect')", equals: "off")
+    await harness.assertString(
+      "document.querySelector('#explicit-prose').getAttribute('spellcheck')", equals: "true")
+    await harness.assertString(
+      "document.querySelector('#explicit-prose').getAttribute('autocorrect')", equals: "off")
+    for selector in ["#pre", "#code", "#kbd", "#samp"] {
+      await harness.assertString(
+        "document.querySelector('\(selector)').getAttribute('spellcheck')", equals: "false")
+    }
+
+    try await harness.evaluate("window.kiln.setEditing(false)")
+    try await Task.sleep(nanoseconds: 200_000_000)
+    guard let afterModes = try await harness.string("window.kiln.serialize()") else {
+      XCTFail("serialize() returned no HTML after spellcheck mode changes")
+      return
+    }
+    XCTAssertEqual(afterModes, before, "Mode-only spellcheck hints must not affect serialized HTML")
+    XCTAssertFalse(harness.receivedChange, "Mode-only spellcheck hints must not report a change")
+
+    try await harness.beginEditing()
+    try await harness.placeCaret(in: "#plain", textOffset: 10)
+    try await harness.type(" updated")
+    await harness.assertString(
+      "document.querySelector('#plain').textContent", equals: "plain text updated")
+
+    // Native Enter and the paragraph-list Enter handler both clone inline nodes.
+    try await harness.placeCaret(in: "#split code", textOffset: 5)
+    try await harness.evaluate("document.execCommand('insertParagraph')")
+    try await harness.placeCaret(in: "#split-list code", textOffset: 6)
+    try await harness.evaluate(
+      "document.querySelector('#split-list code').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}))"
+    )
+    await harness.assertNumber("document.querySelectorAll('#split code').length", equals: 2)
+    await harness.assertNumber("document.querySelectorAll('#split-list > li').length", equals: 2)
+    await harness.assertTrue(
+      "(() => { const d = new DOMParser().parseFromString(window.kiln.serialize(), 'text/html'); return [...d.querySelectorAll('#split code')].every(code => !code.hasAttribute('spellcheck')) && [...d.querySelectorAll('#split-list code')].every(code => code.getAttribute('spellcheck') === 'true'); })()"
+    )
+    await harness.assertString(
+      "new DOMParser().parseFromString(window.kiln.serialize(), 'text/html').querySelector('#explicit-prose').getAttribute('data-kiln-snapshot')",
+      equals: "author")
+    await harness.assertFalse("window.kiln.serialize().includes('data-kiln-snapshot-')")
+    await harness.assertTrue(
+      "(() => { const d = new DOMParser().parseFromString(window.kiln.serialize(), 'text/html'); return d.querySelector('#plain').getAttribute('spellcheck') === null && d.querySelector('#plain').getAttribute('autocorrect') === null; })()"
+    )
+    await harness.assertString(
+      "new DOMParser().parseFromString(window.kiln.serialize(), 'text/html').querySelector('#explicit-prose').getAttribute('spellcheck')",
+      equals: "false")
+    await harness.assertString(
+      "new DOMParser().parseFromString(window.kiln.serialize(), 'text/html').querySelector('#explicit-prose').getAttribute('autocorrect')",
+      equals: "on")
+    for (selector, attribute, value) in [
+      ("#pre", "spellcheck", "true"), ("#pre", "autocorrect", "on"),
+      ("#code", "spellcheck", "true"), ("#code", "autocorrect", "on"),
+    ] {
+      await harness.assertString(
+        "new DOMParser().parseFromString(window.kiln.serialize(), 'text/html').querySelector('\(selector)').getAttribute('\(attribute)')",
+        equals: value)
+    }
+    await harness.assertTrue(
+      "(() => { const d = new DOMParser().parseFromString(window.kiln.serialize(), 'text/html'); return ['#kbd', '#samp'].every(selector => d.querySelector(selector).getAttribute('spellcheck') === null); })()"
+    )
+    await harness.assertFalse("window.kiln.serialize().includes('data-kiln-editing')")
+  }
+
+  @MainActor
   func testSerializationPreservesDocumentDataAndDoesNotExecuteArtifactPayload() async throws {
     let harness = EditorHarness(testCase: self, source: try EditorHarness.editorSource())
     defer { harness.stop() }

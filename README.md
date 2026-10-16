@@ -23,6 +23,9 @@ The release also includes [SHA256SUMS.txt](https://github.com/meagerfindings/kil
 to verify the archive. This prebuilt is Apple Silicon only; Intel runtime
 behavior has not been tested.
 
+The v0.3.0 download predates Markdown typing shortcuts and spell-check. Build
+from current `main` using the instructions below to try those features.
+
 ```sh
 shasum -a 256 -c SHA256SUMS.txt
 unzip Kiln-0.3.0-macOS-arm64.zip
@@ -83,6 +86,12 @@ open dist/Kiln.app
   so a full source draft cannot overwrite concurrent visual edits.
 - **Command palette** (`⌘P`) searches the available actions. Use the arrow keys
   and Return, or click a command. Escape dismisses it.
+- **Spell-check** starts on for prose. Right-click an underlined word for native
+  macOS suggestions. **Edit → Spelling and Grammar → Check Spelling While Typing**
+  toggles checking and remembers your choice. Automatic spelling correction is
+  disabled on the page; macOS text replacement starts off. Code blocks, inline
+  code, and the HTML/CSS editors are excluded. Spelling hints never become part
+  of your saved HTML.
 - **Appearance** offers System, Light, and Dark in the View menu or toolbar's
   more menu. The app chrome and source editor adapt; imported pages keep their
   own colors. Pages with `prefers-color-scheme` styles, including the sample,

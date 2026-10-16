@@ -29,6 +29,7 @@ struct KilnApp: App {
     }
     .defaultSize(width: 1120, height: 900)
     .commands {
+      TextEditingCommands()
       CommandGroup(replacing: .newItem) {
         ForEach([EditorCommand.open, .save, .saveAs]) { command in
           Button(command.title) { command.perform(document) }

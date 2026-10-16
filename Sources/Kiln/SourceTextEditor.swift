@@ -230,6 +230,20 @@ private final class KilnSourceTextView: NSTextView {
   var sourceCompletionHandler: (() -> Void)?
   var language: SourceLanguage = .html
 
+  override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+    if [
+      #selector(NSTextView.toggleContinuousSpellChecking(_:)),
+      #selector(NSTextView.toggleGrammarChecking(_:)),
+      #selector(NSTextView.toggleAutomaticSpellingCorrection(_:)),
+      #selector(NSTextView.toggleAutomaticTextReplacement(_:)),
+      #selector(NSTextView.checkSpelling(_:)),
+      #selector(NSTextView.showGuessPanel(_:)),
+    ].contains(item.action) {
+      return false
+    }
+    return super.validateUserInterfaceItem(item)
+  }
+
   override var rangeForUserCompletion: NSRange {
     guard language == .html else { return super.rangeForUserCompletion }
     let source = string as NSString

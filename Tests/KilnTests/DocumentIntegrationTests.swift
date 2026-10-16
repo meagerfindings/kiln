@@ -7,6 +7,78 @@ import XCTest
 
 final class DocumentIntegrationTests: XCTestCase {
   @MainActor
+  func testNativeSpellingStartsEnabledHonorsToggleAndExcludesSource() async throws {
+    _ = NSApplication.shared
+    let defaults = UserDefaults.standard
+    let previous = defaults.object(forKey: "didConfigureProseSpelling")
+    let probe = WKWebView()
+    func menuItem(_ action: Selector, in web: WKWebView) -> NSMenuItem {
+      let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
+      _ = web.validateUserInterfaceItem(item)
+      return item
+    }
+    let spelling = #selector(NSTextView.toggleContinuousSpellChecking(_:))
+    let replacement = #selector(NSTextView.toggleAutomaticTextReplacement(_:))
+    let previousSpelling = menuItem(spelling, in: probe).state
+    let previousReplacement = menuItem(replacement, in: probe).state
+    defer {
+      for (action, state) in [(spelling, previousSpelling), (replacement, previousReplacement)] {
+        if menuItem(action, in: probe).state != state {
+          NSApp.sendAction(action, to: probe, from: nil)
+        }
+      }
+      if let previous {
+        defaults.set(previous, forKey: "didConfigureProseSpelling")
+      } else {
+        defaults.removeObject(forKey: "didConfigureProseSpelling")
+      }
+    }
+    defaults.removeObject(forKey: "didConfigureProseSpelling")
+    if previousSpelling == .on { NSApp.sendAction(spelling, to: probe, from: nil) }
+    if previousReplacement == .off { NSApp.sendAction(replacement, to: probe, from: nil) }
+
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "kiln-spelling-\(UUID()).html")
+    try Data("<html lang=\"en\"><body><p></p></body></html>".utf8).write(to: file)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let harness = NativeDocumentHarness()
+    defer { harness.close() }
+    harness.document.requestOpen(file)
+    try await harness.waitUntil { harness.document.hasDocument && !harness.document.isLoading }
+    let web = try XCTUnwrap(harness.web)
+    XCTAssertEqual(menuItem(spelling, in: web).state, .on)
+    XCTAssertEqual(menuItem(replacement, in: web).state, .off)
+    harness.window.makeFirstResponder(web)
+    _ = try await harness.js("document.querySelector('p').focus()")
+    for character in "mispelled " { web.insertText(String(character)) }
+    XCTAssertTrue(NSApp.sendAction(#selector(NSTextView.checkSpelling(_:)), to: web, from: nil))
+    try await harness.waitUntil {
+      try await harness.js("getSelection().toString()") as? String == "mispelled"
+    }
+    let copy = try await harness.js("document.querySelector('p').textContent") as? String
+    XCTAssertEqual(copy?.replacingOccurrences(of: "\u{a0}", with: " "), "mispelled ")
+
+    XCTAssertTrue(NSApp.sendAction(spelling, to: web, from: nil))
+    XCTAssertEqual(menuItem(spelling, in: web).state, .off)
+    let reopened = NativeDocumentHarness()
+    defer { reopened.close() }
+    reopened.document.requestOpen(file)
+    try await reopened.waitUntil { reopened.document.hasDocument && !reopened.document.isLoading }
+    XCTAssertEqual(menuItem(spelling, in: try XCTUnwrap(reopened.web)).state, .off)
+
+    await harness.document.showSource(.html)
+    try await harness.waitUntil {
+      NativeDocumentHarness.descendant(NSTextView.self, in: harness.view) != nil
+    }
+    let code = try XCTUnwrap(NativeDocumentHarness.descendant(NSTextView.self, in: harness.view))
+    XCTAssertFalse(code.isContinuousSpellCheckingEnabled)
+    XCTAssertFalse(code.isAutomaticSpellingCorrectionEnabled)
+    XCTAssertFalse(code.isAutomaticTextReplacementEnabled)
+    XCTAssertFalse(code.validateUserInterfaceItem(menuItem(spelling, in: web)))
+    XCTAssertNil(harness.document.errorMessage)
+  }
+
+  @MainActor
   func testCodeEditsPreviewAndSaveThroughTheRealBridgeWithoutLosingPendingChanges() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(
       "kiln-source-\(UUID()).html")
