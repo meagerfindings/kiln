@@ -17,20 +17,21 @@ one. Kiln leaves the document's design in place.
 
 ## Install
 
-Requires macOS 14 or later and an Apple Silicon Mac. Download the v0.4.1
-preview: [Kiln-0.4.1-macOS-arm64.zip](https://github.com/meagerfindings/kiln/releases/download/v0.4.1/Kiln-0.4.1-macOS-arm64.zip).
-The release also includes [SHA256SUMS.txt](https://github.com/meagerfindings/kiln/releases/download/v0.4.1/SHA256SUMS.txt)
+Requires macOS 14 or later and an Apple Silicon Mac. Download the v0.5.0
+preview: [Kiln-0.5.0-macOS-arm64.zip](https://github.com/meagerfindings/kiln/releases/download/v0.5.0/Kiln-0.5.0-macOS-arm64.zip).
+The release also includes [SHA256SUMS.txt](https://github.com/meagerfindings/kiln/releases/download/v0.5.0/SHA256SUMS.txt)
 to verify the archive. This prebuilt is Apple Silicon only; Intel runtime
 behavior has not been tested.
 
-This preview fixes an invisible overlay that blocked clicks on the editor and
-toolbar. Markdown typing shortcuts and native macOS spell-check are included.
+This preview adds autosave, local recovery copies, and external-change protection.
+Edits now save automatically after one second of inactivity; try it on a copy of
+an important document first. Markdown shortcuts and native spell-check remain included.
 To update, quit Kiln, unzip the download, then drag Kiln into Applications in
 Finder and choose **Replace**. For a first install from Terminal:
 
 ```sh
 shasum -a 256 -c SHA256SUMS.txt
-unzip Kiln-0.4.1-macOS-arm64.zip
+unzip Kiln-0.5.0-macOS-arm64.zip
 mv Kiln.app /Applications/
 open /Applications/Kiln.app
 ```
@@ -64,10 +65,9 @@ open dist/Kiln.app
 
 ## Use
 
-Autosave below is available in the current source build; the v0.4.1 download
-still uses manual Save.
-
 - **Open** (`⌘O`) a `.html` or `.htm` file, or open one with Kiln in Finder.
+  If launching with a file opens no window, start Kiln on its own and use `⌘O`;
+  the filename-at-launch path remains a known preview limitation.
 - **Live Edit** lets you edit headings, paragraphs, list items, table cells, and
   text blocks in place. Press Enter in a list to continue it. Paste inserts plain
   text, not clipboard HTML.
