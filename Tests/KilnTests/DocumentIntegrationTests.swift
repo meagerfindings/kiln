@@ -7,6 +7,67 @@ import XCTest
 
 final class DocumentIntegrationTests: XCTestCase {
   @MainActor
+  func testPointerClickReachesEditablePage() async throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "kiln-clicks-\(UUID()).html")
+    try Data("<p style=\"font-size:24px;margin:40px\">Editable copy</p>".utf8).write(to: file)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let harness = NativeDocumentHarness()
+    defer { harness.close() }
+    harness.document.requestOpen(file)
+    try await harness.waitUntil { harness.document.hasDocument && !harness.document.isLoading }
+    let web = try XCTUnwrap(harness.web)
+    let bounds =
+      try await harness.js(
+        """
+        (() => { const r = document.createRange(); r.selectNodeContents(document.querySelector('p'));
+          const b = r.getBoundingClientRect(); return {x: b.x + b.width / 2, y: b.y + b.height / 2}; })()
+        """) as? [String: Double]
+    let point = try XCTUnwrap(bounds)
+    let x = try XCTUnwrap(point["x"])
+    let y = try XCTUnwrap(point["y"])
+    let pageLocation = web.convert(
+      NSPoint(x: x, y: web.isFlipped ? y : web.bounds.height - y), to: nil)
+
+    // SwiftPM doesn't activate an app. Use AppKit's real hit-testing to choose the mouse
+    // target, rather than focusing WKWebView directly and bypassing blocking overlays.
+    let content = try XCTUnwrap(harness.window.contentView)
+    let parent = try XCTUnwrap(content.superview)
+    let target = try XCTUnwrap(content.hitTest(parent.convert(pageLocation, from: nil)))
+    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+      let event = try XCTUnwrap(
+        NSEvent.mouseEvent(
+          with: type, location: pageLocation, modifierFlags: [],
+          timestamp: ProcessInfo.processInfo.systemUptime,
+          windowNumber: harness.window.windowNumber,
+          context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+      if type == .leftMouseDown {
+        target.mouseDown(with: event)
+      } else {
+        target.mouseUp(with: event)
+      }
+    }
+    try await harness.waitUntil {
+      try await harness.js("document.activeElement === document.querySelector('p')") as? Bool
+        == true
+    }
+    // Route typing through the window too: directly focusing WKWebView would hide a blocked click.
+    let key = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: harness.window.windowNumber,
+        context: nil, characters: "z", charactersIgnoringModifiers: "z", isARepeat: false,
+        keyCode: 6))
+    harness.window.sendEvent(key)
+    try await harness.waitUntil {
+      try await harness.js("document.querySelector('p').textContent.includes('z')") as? Bool == true
+    }
+    let text = try await harness.js("document.querySelector('p').textContent") as? String
+    XCTAssertEqual(text?.replacingOccurrences(of: "z", with: ""), "Editable copy")
+    try await harness.waitUntil { harness.document.isDirty }
+  }
+
+  @MainActor
   func testNativeSpellingStartsEnabledHonorsToggleAndExcludesSource() async throws {
     _ = NSApplication.shared
     let defaults = UserDefaults.standard

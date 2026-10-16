@@ -48,7 +48,11 @@ struct KilnWindow: View {
         document.showCommandPalette = false
       }
     }
-    .overlay(alignment: .top) { WindowCloseGuard(document: document) }
+    .background {
+      WindowCloseGuard(document: document)
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false)
+    }
     .alert("Unsaved changes", isPresented: $document.showUnsavedPrompt) {
       Button("Save") { document.resolveUnsavedPrompt(.save) }
       Button("Discard Changes", role: .destructive) { document.resolveUnsavedPrompt(.discard) }

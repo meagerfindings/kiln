@@ -17,18 +17,20 @@ one. Kiln leaves the document's design in place.
 
 ## Install
 
-Requires macOS 14 or later and an Apple Silicon Mac. Download the v0.4.0
-preview: [Kiln-0.4.0-macOS-arm64.zip](https://github.com/meagerfindings/kiln/releases/download/v0.4.0/Kiln-0.4.0-macOS-arm64.zip).
-The release also includes [SHA256SUMS.txt](https://github.com/meagerfindings/kiln/releases/download/v0.4.0/SHA256SUMS.txt)
+Requires macOS 14 or later and an Apple Silicon Mac. Download the v0.4.1
+preview: [Kiln-0.4.1-macOS-arm64.zip](https://github.com/meagerfindings/kiln/releases/download/v0.4.1/Kiln-0.4.1-macOS-arm64.zip).
+The release also includes [SHA256SUMS.txt](https://github.com/meagerfindings/kiln/releases/download/v0.4.1/SHA256SUMS.txt)
 to verify the archive. This prebuilt is Apple Silicon only; Intel runtime
 behavior has not been tested.
 
-This preview includes Markdown typing shortcuts and native macOS spell-check.
-Quit any running copy of Kiln before replacing it in Applications.
+This preview fixes an invisible overlay that blocked clicks on the editor and
+toolbar. Markdown typing shortcuts and native macOS spell-check are included.
+To update, quit Kiln, unzip the download, then drag Kiln into Applications in
+Finder and choose **Replace**. For a first install from Terminal:
 
 ```sh
 shasum -a 256 -c SHA256SUMS.txt
-unzip Kiln-0.4.0-macOS-arm64.zip
+unzip Kiln-0.4.1-macOS-arm64.zip
 mv Kiln.app /Applications/
 open /Applications/Kiln.app
 ```
